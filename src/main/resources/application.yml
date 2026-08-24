@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: myfis-server
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/myfis}
+    username: ${DATABASE_USERNAME:myfis}
+    password: ${DATABASE_PASSWORD:myfis}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  shutdown: graceful
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  jwt:
+    secret: ${JWT_SECRET}
+    access-token-minutes: ${JWT_ACCESS_TOKEN_MINUTES:30}
+  phone-auth:
+    dummy-code: ${PHONE_AUTH_DUMMY_CODE:000000}
+    ttl-seconds: ${PHONE_AUTH_TTL_SECONDS:300}
