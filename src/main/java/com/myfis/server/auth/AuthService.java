@@ -1,6 +1,7 @@
 package com.myfis.server.auth;
 
 import java.util.Locale;
+import java.time.Duration;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -12,50 +13,42 @@ import org.springframework.web.server.ResponseStatusException;
 
 import com.myfis.server.auth.AuthDtos.LoginRequest;
 import com.myfis.server.auth.AuthDtos.SignupRequest;
+import com.myfis.server.auth.AuthDtos.RefreshRequest;
 
 @Service
 public class AuthService {
-    private static final String VERIFIED_PREFIX = "phone:verified:";
-    private static final String REQUESTED_PREFIX = "phone:requested:";
-
+    private static final String REFRESH_PREFIX = "auth:refresh:";
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final StringRedisTemplate redis;
+    private final PhoneVerificationService phoneVerificationService;
     private final JwtService jwtService;
-    private final String dummyCode;
-    private final long ttlSeconds;
-
+    private final StringRedisTemplate redis;
+    private final long refreshTokenDays;
     public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder,
-                       StringRedisTemplate redis, JwtService jwtService,
-                       @Value("${app.phone-auth.dummy-code}") String dummyCode,
-                       @Value("${app.phone-auth.ttl-seconds:300}") long ttlSeconds) {
+                       PhoneVerificationService phoneVerificationService, JwtService jwtService,
+                       StringRedisTemplate redis,
+                       @Value("${app.jwt.refresh-token-days:14}") long refreshTokenDays) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
-        this.redis = redis;
+        this.phoneVerificationService = phoneVerificationService;
         this.jwtService = jwtService;
-        this.dummyCode = dummyCode;
-        this.ttlSeconds = ttlSeconds;
+        this.redis = redis;
+        this.refreshTokenDays = refreshTokenDays;
     }
 
     public void requestPhoneVerification(String phoneNumber) {
-        String phone = normalizePhone(phoneNumber);
-        redis.opsForValue().set(REQUESTED_PREFIX + phone, "1", java.time.Duration.ofSeconds(ttlSeconds));
+        phoneVerificationService.request(phoneNumber);
     }
 
     public void confirmPhoneVerification(String phoneNumber, String code) {
-        String phone = normalizePhone(phoneNumber);
-        if (!dummyCode.equals(code) || !Boolean.TRUE.equals(redis.hasKey(REQUESTED_PREFIX + phone))) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid phone verification");
-        }
-        redis.opsForValue().set(VERIFIED_PREFIX + phone, "1", java.time.Duration.ofSeconds(ttlSeconds));
-        redis.delete(REQUESTED_PREFIX + phone);
+        phoneVerificationService.confirm(phoneNumber, code);
     }
 
     @Transactional
     public AuthDtos.TokenResponse signup(SignupRequest request) {
         String email = request.email().trim().toLowerCase(Locale.ROOT);
         String phone = normalizePhone(request.phoneNumber());
-        if (!Boolean.TRUE.equals(redis.hasKey(VERIFIED_PREFIX + phone))) {
+        if (!phoneVerificationService.consume(phone)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone verification is required");
         }
         if (userRepository.existsByEmailIgnoreCase(email) || userRepository.existsByPhoneNumber(phone)) {
@@ -64,8 +57,7 @@ public class AuthService {
         User user = userRepository.save(new User(request.name().trim(), email,
             passwordEncoder.encode(request.password()), request.age(), request.gender().trim(), phone,
             request.height(), request.weight(), request.exerciseExperience().trim(), request.referrer()));
-        redis.delete(VERIFIED_PREFIX + phone);
-        return new AuthDtos.TokenResponse(jwtService.issue(user), "Bearer");
+        return issueTokens(user);
     }
 
     @Transactional(readOnly = true)
@@ -77,11 +69,41 @@ public class AuthService {
         if (user == null || !passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid credentials");
         }
-        return new AuthDtos.TokenResponse(jwtService.issue(user), "Bearer");
+        return issueTokens(user);
+    }
+
+    public AuthDtos.TokenResponse refresh(RefreshRequest request) {
+        var claims = jwtService.parseRefresh(request.refreshToken());
+        String refreshKey = REFRESH_PREFIX + claims.getId();
+        String userId = redis.opsForValue().getAndDelete(refreshKey);
+        if (userId == null || !userId.equals(claims.getSubject())) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh token is invalid or already used");
+        }
+        User user = userRepository.findById(Long.valueOf(userId)).filter(User::isActive).orElseThrow(
+            () -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User is unavailable"));
+        return issueTokens(user);
+    }
+
+    public void logout(RefreshRequest request) {
+        try {
+            var claims = jwtService.parseRefresh(request.refreshToken());
+            redis.delete(REFRESH_PREFIX + claims.getId());
+        } catch (RuntimeException ignored) {
+            // Logout is idempotent even when the client already discarded the token.
+        }
+    }
+
+    private AuthDtos.TokenResponse issueTokens(User user) {
+        String refreshToken = jwtService.issueRefresh(user);
+        var refreshClaims = jwtService.parseRefresh(refreshToken);
+        redis.opsForValue().set(REFRESH_PREFIX + refreshClaims.getId(), user.getId().toString(),
+            Duration.ofDays(refreshTokenDays));
+        return new AuthDtos.TokenResponse(jwtService.issueAccess(user), refreshToken, "Bearer",
+            jwtService.accessTokenLifetimeSeconds());
     }
 
     private String normalizePhone(String phoneNumber) {
-        String phone = phoneNumber.replaceAll("[^0-9+]", "");
+        String phone = phoneNumber.replaceAll("[ -]", "");
         if (!phone.matches("^\\+?[0-9]{9,15}$")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid phone number");
         }

@@ -50,6 +50,9 @@ public class User {
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Column(nullable = false)
+    private boolean active = true;
+
     protected User() {
     }
 
@@ -73,4 +76,5 @@ public class User {
     public String getEmail() { return email; }
     public String getPhoneNumber() { return phoneNumber; }
     public String getPasswordHash() { return passwordHash; }
+    public boolean isActive() { return active; }
 }

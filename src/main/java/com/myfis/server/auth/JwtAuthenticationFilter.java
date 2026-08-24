@@ -14,9 +14,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
+    private final UserRepository userRepository;
 
-    public JwtAuthenticationFilter(JwtService jwtService) {
+    public JwtAuthenticationFilter(JwtService jwtService, UserRepository userRepository) {
         this.jwtService = jwtService;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -25,7 +27,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
             try {
-                String subject = jwtService.parse(header.substring(7)).getSubject();
+                String subject = jwtService.parseAccess(header.substring(7)).getSubject();
+                User user = userRepository.findById(Long.valueOf(subject)).orElseThrow();
+                if (!user.isActive()) {
+                    throw new IllegalStateException("Inactive user");
+                }
                 var authentication = new UsernamePasswordAuthenticationToken(
                     subject, null, AuthorityUtils.NO_AUTHORITIES);
                 org.springframework.security.core.context.SecurityContextHolder

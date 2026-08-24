@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.myfis.server.auth.AuthDtos.LoginRequest;
+import com.myfis.server.auth.AuthDtos.RefreshRequest;
 import com.myfis.server.auth.AuthDtos.PhoneVerificationConfirm;
 import com.myfis.server.auth.AuthDtos.PhoneVerificationRequest;
 import com.myfis.server.auth.AuthDtos.SignupRequest;
@@ -45,5 +46,16 @@ public class AuthController {
     @PostMapping("/login")
     public AuthDtos.TokenResponse login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request);
+    }
+
+    @PostMapping("/refresh")
+    public AuthDtos.TokenResponse refresh(@Valid @RequestBody RefreshRequest request) {
+        return authService.refresh(request);
+    }
+
+    @PostMapping("/logout")
+    public AuthDtos.MessageResponse logout(@Valid @RequestBody RefreshRequest request) {
+        authService.logout(request);
+        return new AuthDtos.MessageResponse("Logged out");
     }
 }
